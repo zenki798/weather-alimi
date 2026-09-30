@@ -2,10 +2,19 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>날씨알리미</title>
   <meta name="description" content="지역명을 검색하거나 지도에서 위치를 찍어 하루·일주일·한달 날씨를 봅니다.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%A6%3C/text%3E%3C/svg%3E">
+  <!-- 홈 화면에 추가하면 주소창·툴바 없이 앱처럼(standalone) 뜬다 -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#f4f6f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="날씨알리미">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <style>
     :root {
@@ -87,7 +96,26 @@
       font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     }
     button, input { font: inherit; color: inherit; }
-    .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+    /* 노치·홈 표시줄이 있는 기기에서 내용이 가려지지 않게 안전 영역만큼 띄운다 */
+    .wrap {
+      max-width: 1180px; margin: 0 auto;
+      padding: calc(20px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+        calc(40px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    }
+
+    /* 앱(홈 화면)으로 실행 중일 때: 웹페이지 티가 나는 동작을 줄인다 */
+    html.app-mode { -webkit-tap-highlight-color: transparent; }
+    html.app-mode body { overscroll-behavior-y: none; }
+    html.app-mode button, html.app-mode .tab, html.app-mode .chip { -webkit-user-select: none; user-select: none; }
+
+    /* 앱 설치 안내 (브라우저로 볼 때만) */
+    .install {
+      margin: 0 0 14px; padding: 10px 14px; border-radius: 12px; background: var(--accent-wash);
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 14px;
+    }
+    .install[hidden] { display: none; }
+    .install span { flex: 1; min-width: 180px; }
+    .install .btn { padding: 6px 12px; font-size: 14px; }
 
     header.top { margin-bottom: 16px; }
     header.top h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
@@ -189,6 +217,13 @@
     .place h2 { margin: 0; font-size: 20px; }
     .place .detail { color: var(--ink-2); font-size: 13px; }
     .place .coords { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .refresh {
+      margin-left: 6px; padding: 3px 10px;
+      border: 1px solid var(--border); border-radius: 999px;
+      background: var(--surface); color: var(--ink-2);
+      font-size: 12px; cursor: pointer;
+    }
+    .refresh:hover { background: var(--surface-2); }
     .now { display: flex; align-items: center; gap: 16px; margin: 14px 0 16px; flex-wrap: wrap; }
     .now .icon { font-size: 52px; line-height: 1; }
     .now .temp { font-size: 56px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
@@ -281,12 +316,31 @@
     .d-date .d-md { display: block; font-size: 12px; color: var(--muted); }
     .d-halves { grid-area: halves; display: flex; gap: 10px; min-width: 0; }
     .half { flex: none; display: flex; align-items: center; gap: 4px; font-size: 12px; }
-    .half .h-lab { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .half .h-lab { color: var(--ink-2); font-size: 13px; font-weight: 700; white-space: nowrap; }
     .half .i { font-size: 20px; line-height: 1.1; }
     .half .h-pop { color: var(--ink-2); min-width: 28px; }
     .half.whole { flex: 1; min-width: 0; font-size: 13px; gap: 6px; }
     .half.whole .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .d-temp { grid-area: temp; display: flex; align-items: center; gap: 8px; }
+    .scale-row { padding-top: 2px; padding-bottom: 6px; }
+    .scale-row .s-lab { grid-area: halves; font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .scale-row .d-temp span { color: var(--muted); font-size: 12px; font-weight: 400; }
+    .axis { position: relative; flex: 1; height: 18px; border-bottom: 1px solid var(--axis); }
+    /* 양 끝 눈금: 막대 줄의 왼쪽 끝 = 가장 낮은 기온, 오른쪽 끝 = 가장 높은 기온 */
+    .axis::before, .axis::after {
+      content: ""; position: absolute; bottom: 0;
+      width: 1px; height: 6px; background: var(--axis);
+    }
+    .axis::before { left: 0; }
+    .axis::after { right: 0; }
+    .axis .tick {
+      position: absolute; bottom: 0; transform: translateX(-50%);
+      padding-bottom: 5px; font-size: 11px; color: var(--muted); white-space: nowrap;
+    }
+    .axis .tick::after {
+      content: ""; position: absolute; left: 50%; bottom: 0;
+      width: 1px; height: 4px; background: var(--axis);
+    }
     .d-temp .t-min { width: 34px; text-align: right; color: var(--ink-2); }
     .d-temp .t-max { width: 34px; font-weight: 700; }
     .range { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--surface-2); }
@@ -312,13 +366,10 @@
     }
     @container (max-width: 480px) {
       .day-row {
-        grid-template-columns: 46px 92px minmax(0, 1fr) 12px;
-        grid-template-areas: "date halves temp chev" "date meta meta chev";
+        grid-template-columns: 46px minmax(0, 1fr) 12px;
+        grid-template-areas: "date halves chev" "date temp chev" "date meta chev";
         row-gap: 4px; column-gap: 10px;
       }
-      .d-halves { gap: 6px; }
-      .half { flex-direction: column; gap: 1px; width: 43px; }
-      .half.whole { flex-direction: row; width: auto; }
       .d-meta { gap: 8px; }
     }
 
@@ -334,11 +385,17 @@
       <p>지역명을 검색하거나 지도에서 원하는 곳을 눌러 하루 · 일주일 · 한달 날씨를 확인하세요.</p>
     </header>
 
+    <div id="install-bar" class="install" role="note" hidden>
+      <span id="install-text"></span>
+      <button type="button" id="install-btn" class="btn" hidden>앱으로 설치</button>
+      <button type="button" id="install-close" class="btn ghost" aria-label="안내 닫기">닫기</button>
+    </div>
+
     <div class="layout">
       <section class="side" aria-label="위치 선택">
         <form id="searchForm" class="search" role="search" autocomplete="off">
           <label for="q" class="sr-only">지역명</label>
-          <input id="q" type="search" placeholder="지역명 예: 강남구, 해운대, 제주시" enterkeyhint="search">
+          <input id="q" type="search" placeholder="지역명 예: 강남구, 해운대, 봉평면 창동리" enterkeyhint="search">
           <button class="btn" type="submit">검색</button>
         </form>
         <div id="candidates" class="candidates" hidden></div>
@@ -363,7 +420,7 @@
                 <h2 id="placeName">위치를 고르는 중…</h2>
                 <div id="placeDetail" class="detail"></div>
               </div>
-              <div class="coords"><span id="coords"></span> <span id="obsTime"></span></div>
+              <div class="coords"><span id="coords"></span> <span id="obsTime"></span><button id="refreshBtn" class="refresh" type="button" title="날씨를 새로 받습니다">↻ 새로고침</button></div>
             </div>
             <div class="now">
               <div id="nowIcon" class="icon" aria-hidden="true">⏳</div>
@@ -398,13 +455,15 @@
 
           <section id="panel-week" class="card panel" role="tabpanel" aria-labelledby="tab-week" hidden>
             <h3>7일 예보</h3>
-            <p class="note">오전·오후 날씨와 강수확률입니다. 날짜를 누르면 3시간 간격 예보가 펼쳐집니다. 막대는 하루의 최저~최고 기온입니다.</p>
+            <p class="note">오전·오후 날씨와 강수확률입니다. 날짜를 누르면 3시간 간격 예보가 펼쳐집니다.</p>
+            <p class="note how">파란 막대는 그날의 <b>최저~최고 기온</b>입니다. 왼쪽 끝이 최저, 오른쪽 끝이 최고이고, 모든 날이 맨 위 <b>기온 눈금</b>을 같이 씁니다. 막대가 <b>오른쪽</b>에 있을수록 따뜻한 날, <b>길수록</b> 일교차가 큰 날입니다.</p>
             <ul id="weekList" class="days"></ul>
           </section>
 
           <section id="panel-month" class="card panel" role="tabpanel" aria-labelledby="tab-month" hidden>
             <h3>30일 날씨</h3>
             <p id="monthNote" class="note"></p>
+            <p class="note how">파란 막대는 그날의 <b>최저~최고 기온</b>입니다. 왼쪽 끝이 최저, 오른쪽 끝이 최고이고, 모든 날이 맨 위 <b>기온 눈금</b>을 같이 씁니다. 막대가 <b>오른쪽</b>에 있을수록 따뜻한 날, <b>길수록</b> 일교차가 큰 날입니다. 빗금 막대는 예보가 아닌 예년 평균입니다.</p>
             <ul id="monthList" class="days"></ul>
           </section>
         </div>

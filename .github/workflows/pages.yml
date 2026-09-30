@@ -61,9 +61,10 @@ jobs:
       # 실제 페이지에 필요한 파일만 추린다. (테스트·서버·스크립트·설정은 배포하지 않는다)
       - name: 배포할 파일 모으기
         run: |
-          mkdir -p _site/vendor
-          cp index.html app.js weather-api.js _site/
+          mkdir -p _site/vendor _site/icons
+          cp index.html app.js weather-api.js manifest.webmanifest sw.js _site/
           cp -r vendor/leaflet _site/vendor/
+          cp icons/*.png _site/icons/
           find _site -type f
 
       - uses: actions/upload-pages-artifact@v3

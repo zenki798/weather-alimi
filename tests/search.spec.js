@@ -70,6 +70,28 @@ test.describe('지역명 검색', () => {
     expect(calls.forecast.at(-1).searchParams.get('latitude')).toBe('37.5172');
   });
 
+  test('시골의 리 이름도 찾는다 (예: 평창군 봉평면 창동리)', async ({ page }) => {
+    const calls = await open(page);
+    await search(page, '평창군 봉평면 창동리');
+    await expect(page.locator('#placeName')).toHaveText('창동리');
+    await expect(page.locator('#placeDetail')).toHaveText('강원특별자치도 평창군 봉평면 · 대한민국');
+    await waitReady(page);
+    expect(calls.forecast.at(-1).searchParams.get('latitude')).toBe('37.6116');
+    expect(calls.forecast.at(-1).searchParams.get('longitude')).toBe('128.375');
+  });
+
+  test('리 이름이 지도 자료에 없으면 면 범위로 다시 찾고, 그렇게 했다고 알린다', async ({ page }) => {
+    const calls = await open(page);
+    await search(page, '가평군 상면 없는리');
+    await expect(page.locator('#status')).toContainText('범위에서 다시 찾는 중');
+    await expect(page.locator('#placeName')).toHaveText('상면');
+    await waitReady(page);
+    const note = page.locator('#status .msg.warn');
+    await expect(note).toContainText('“없는리” 이름은 지도 자료에 없어서 “상면” 날씨를 보여줍니다');
+    await expect(note).toContainText('지도에서 눌러');
+    expect(calls.search.map((u) => u.searchParams.get('q'))).toEqual(['가평군 상면 없는리', '가평군 상면']);
+  });
+
   test('빈 검색어는 요청을 보내지 않는다', async ({ page }) => {
     const calls = await open(page);
     await search(page, '   ');

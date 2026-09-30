@@ -149,11 +149,20 @@ test.describe('데이터 계층 (WeatherAPI)', () => {
         f({ province: '제주특별자치도', city: '제주시', country: '대한민국' }),
         f({}, '', '어딘가, 먼 곳, 바다'),
         f(null, '', ''),
+        /* 시골: 읍·면(town)과 리(village)를 둘 다 살린다 */
+        f({ village: '행현리', town: '상면', county: '가평군', province: '경기도', country: '대한민국' }),
+        f({ village: '창동리', town: '증평읍', county: '증평군', province: '충청북도', country: '대한민국' }),
+        f({ village: '창동리', city: '충주시', province: '충청북도', country: '대한민국' }),
+        f({ town: '봉평면', county: '평창군', province: '강원특별자치도', country: '대한민국' }),
       ];
     });
     expect(r[0]).toEqual({ name: '중구 명동', detail: '서울특별시 · 대한민국' });
     expect(r[1]).toEqual({ name: '제주특별자치도 제주시', detail: '대한민국' });
     expect(r[2].name).toBe('어딘가, 먼 곳');
     expect(r[3].name).toBe('이름 없는 지점');
+    expect(r[4]).toEqual({ name: '상면 행현리', detail: '경기도 가평군 · 대한민국' });
+    expect(r[5]).toEqual({ name: '증평읍 창동리', detail: '충청북도 증평군 · 대한민국' });
+    expect(r[6]).toEqual({ name: '충주시 창동리', detail: '충청북도 · 대한민국' });
+    expect(r[7]).toEqual({ name: '평창군 봉평면', detail: '강원특별자치도 · 대한민국' });
   });
 });

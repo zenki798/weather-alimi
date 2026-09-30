@@ -114,6 +114,48 @@ test.describe('하루 · 일주일 · 한달 탭', () => {
     await expect(half(3, 'am')).toHaveAttribute('title', '오전 약한 비 · 강수확률 77%');
   });
 
+  test('오전·오후 글자는 굵고 크게 보인다', async ({ page }) => {
+    await open(page);
+    await page.locator('#tab-week').click();
+    const lab = page.locator('#weekList .half[data-half="am"] .h-lab').first();
+    const style = await lab.evaluate((e) => {
+      const c = getComputedStyle(e);
+      return { weight: Number(c.fontWeight), size: parseFloat(c.fontSize) };
+    });
+    expect(style.weight).toBeGreaterThanOrEqual(700);
+    expect(style.size).toBeGreaterThanOrEqual(13);
+  });
+
+  /*
+   * 막대 읽는 법이 화면만 보고 통하도록: 맨 위 기온 눈금과 날마다의 막대가 같은 자리에 맞아야 한다.
+   * 가짜 자료의 이번 주 최저는 11°, 최고는 23° → 5° 간격 눈금(15°, 20°). 첫날은 12°~21°.
+   */
+  test('일주일: 맨 위 기온 눈금이 막대와 같은 자리에 맞춰 있다', async ({ page }) => {
+    await open(page);
+    await page.locator('#tab-week').click();
+    await expect(page.locator('#panel-week .note.how')).toContainText('오른쪽에 있을수록 따뜻한 날');
+
+    const scale = page.locator('#weekList .day-scale');
+    await expect(scale).toHaveCount(1);
+    await expect(scale.locator('.t-min')).toHaveText('11°');
+    await expect(scale.locator('.t-max')).toHaveText('23°');
+    await expect(scale.locator('.tick')).toHaveText(['15°', '20°']);
+
+    const first = page.locator('#weekList .day').first();
+    const track = await first.locator('.range').boundingBox();
+    const at = (t) => track.x + track.width * (t - 11) / (23 - 11);
+
+    const tick = await scale.locator('.tick').first().boundingBox();
+    expect(Math.abs(tick.x + tick.width / 2 - at(15))).toBeLessThan(1.5);
+
+    const fill = await first.locator('.range-fill').boundingBox();
+    expect(Math.abs(fill.x - at(12))).toBeLessThan(1.5);
+    expect(Math.abs(fill.x + fill.width - at(21))).toBeLessThan(1.5);
+
+    /* 마우스를 올리면 숫자로도 — 일교차까지 */
+    await expect(first.locator('.d-temp')).toHaveAttribute('title', '최저 12° · 최고 21° · 일교차 9°');
+  });
+
   test('일주일: 날짜를 누르면 3시간 간격 예보가 펼쳐지고, 다시 누르면 접힌다', async ({ page }) => {
     await open(page);
     await page.locator('#tab-week').click();
@@ -206,6 +248,8 @@ test.describe('하루 · 일주일 · 한달 탭', () => {
     await expect(rows.nth(15).locator('.half[data-half="am"]')).toHaveCount(1);
     await expect(rows.nth(15).locator('button.day-row')).toHaveCount(1);
     await expect(page.locator('#monthNote')).toContainText('8일째 이후는 참고만');
+    await expect(page.locator('#monthList .day-scale')).toHaveCount(1);
+    await expect(normal.locator('.d-temp')).toHaveAttribute('title', '예년 평균 최저 11° · 최고 19° · 일교차 8°');
     expect(calls.archive[0].searchParams.get('daily')).toContain('cloud_cover_mean');
 
     /* 2025·2024·2023 년의 같은 기간을 요청했다 */

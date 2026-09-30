@@ -65,6 +65,20 @@ test.describe('지도 핀으로 위치 고르기', () => {
     expect(got.lon).toBeGreaterThan(before.lon);
   });
 
+  test('시골에서 찍으면 면과 리를 함께 보여준다', async ({ page }) => {
+    await open(page, {
+      reverseResult: {
+        name: '가상리', display_name: '가상리, 시골면, 가상군, 테스트도, 대한민국',
+        address: { village: '가상리', town: '시골면', county: '가상군', province: '테스트도', country: '대한민국' },
+      },
+    });
+    const box = await page.locator('#map').boundingBox();
+    await page.locator('#map').click({ position: { x: Math.round(box.width * 0.35), y: Math.round(box.height * 0.65) } });
+    await expect(page.locator('#placeName')).toHaveText('시골면 가상리');
+    await expect(page.locator('#placeDetail')).toHaveText('테스트도 가상군 · 대한민국');
+    await waitReady(page);
+  });
+
   test('지명을 못 찾아도 좌표 날씨는 보여준다', async ({ page }) => {
     await open(page, { failReverse: true });
     const box = await page.locator('#map').boundingBox();

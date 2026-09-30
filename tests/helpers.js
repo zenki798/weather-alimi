@@ -142,6 +142,18 @@ const SEARCH = {
   ],
 };
 
+/* 시골: Nominatim 은 리를 village, 읍·면을 town 으로 준다 (2026-09-30 실제 응답 형식) */
+SEARCH['평창군 봉평면 창동리'] = [{
+  lat: '37.6116', lon: '128.3750', name: '창동리',
+  display_name: '창동리, 봉평면, 평창군, 강원특별자치도, 대한민국',
+  address: { village: '창동리', town: '봉평면', county: '평창군', province: '강원특별자치도', country: '대한민국' },
+}];
+SEARCH['가평군 상면'] = [{
+  lat: '37.7612', lon: '127.3589', name: '상면',
+  display_name: '상면, 가평군, 경기도, 대한민국',
+  address: { town: '상면', county: '가평군', province: '경기도', country: '대한민국' },
+}];
+
 const REVERSE = {
   name: '핀동', display_name: '핀동, 가상구, 테스트시, 대한민국',
   address: { suburb: '핀동', borough: '가상구', city: '테스트시', country: '대한민국' },
@@ -156,14 +168,19 @@ const REVERSE = {
  * @param {number}  [opt.failForecastTimes] 처음 N 번의 예보 요청을 500 으로
  * @param {(lat:number)=>number} [opt.forecastDelay] 위도별 응답 지연(ms)
  * @param {number}  [opt.archiveDelay]    예년 자료 응답 지연(ms)
+ * @param {number}  [opt.reverseDelay]    지명 확인(역지오코딩) 응답 지연(ms)
+ * @param {object}  [opt.reverseResult]   지명 확인 응답을 이것으로 바꾼다 (기본: 가상구 핀동)
  * @param {string[]} [opt.failTiles]      이 문자열이 주소에 든 지도 타일 요청을 실패시킨다
+ * @param {import('@playwright/test').BrowserContext} [opt.context]
+ *        주면 context.route 로 가로챈다. 서비스 워커를 켠 테스트는 이쪽을 써야 워커의 요청까지 잡힌다.
  */
 async function mockApis(page, opt = {}) {
   const calls = { forecast: [], archive: [], search: [], reverse: [], geocode: [], tiles: [], unexpected: [] };
   let forecastFails = opt.failForecastTimes || 0;
+  const target = opt.context || page;
 
   /* 목록에 없는 외부 요청은 막고 기록한다. 뒤에 등록한 route 가 먼저 적용된다. */
-  await page.route(/^https?:\/\/(?!localhost[:/])/, (route) => {
+  await target.route(/^https?:\/\/(?!localhost[:/])/, (route) => {
     calls.unexpected.push(route.request().url());
     return route.abort();
   });
@@ -175,11 +192,11 @@ async function mockApis(page, opt = {}) {
     if ((opt.failTiles || []).some((s) => url.includes(s))) return route.abort('connectionrefused');
     return route.fulfill({ status: 200, contentType: 'image/png', body: PNG, headers: CORS });
   };
-  await page.route('https://tile.openstreetmap.org/**', tile);
-  await page.route('https://*.tile.openstreetmap.fr/**', tile);
-  await page.route('https://tile.openstreetmap.de/**', tile);
+  await target.route('https://tile.openstreetmap.org/**', tile);
+  await target.route('https://*.tile.openstreetmap.fr/**', tile);
+  await target.route('https://tile.openstreetmap.de/**', tile);
 
-  await page.route('https://api.open-meteo.com/v1/forecast?**', async (route) => {
+  await target.route('https://api.open-meteo.com/v1/forecast?**', async (route) => {
     const url = new URL(route.request().url());
     calls.forecast.push(url);
     const lat = Number(url.searchParams.get('latitude'));
@@ -199,7 +216,7 @@ async function mockApis(page, opt = {}) {
     return route.fulfill({ json: forecastFixture(lat, lon), headers: CORS });
   });
 
-  await page.route('https://archive-api.open-meteo.com/v1/archive?**', async (route) => {
+  await target.route('https://archive-api.open-meteo.com/v1/archive?**', async (route) => {
     const url = new URL(route.request().url());
     calls.archive.push(url);
     if (opt.archiveDelay) {
@@ -218,21 +235,25 @@ async function mockApis(page, opt = {}) {
     });
   });
 
-  await page.route('https://nominatim.openstreetmap.org/search?**', (route) => {
+  await target.route('https://nominatim.openstreetmap.org/search?**', (route) => {
     const url = new URL(route.request().url());
     calls.search.push(url);
     if (opt.failNominatim) return route.abort('internetdisconnected');
     return route.fulfill({ json: SEARCH[url.searchParams.get('q')] || [], headers: CORS });
   });
 
-  await page.route('https://nominatim.openstreetmap.org/reverse?**', (route) => {
+  await target.route('https://nominatim.openstreetmap.org/reverse?**', async (route) => {
     const url = new URL(route.request().url());
     calls.reverse.push(url);
+    if (opt.reverseDelay) {
+      await new Promise((r) => setTimeout(r, opt.reverseDelay));
+      if (!opt.failReverse) return route.fulfill({ json: opt.reverseResult || REVERSE, headers: CORS }).catch(() => {});
+    }
     if (opt.failReverse) return route.abort('internetdisconnected');
-    return route.fulfill({ json: REVERSE, headers: CORS });
+    return route.fulfill({ json: opt.reverseResult || REVERSE, headers: CORS });
   });
 
-  await page.route('https://geocoding-api.open-meteo.com/v1/search?**', (route) => {
+  await target.route('https://geocoding-api.open-meteo.com/v1/search?**', (route) => {
     const url = new URL(route.request().url());
     calls.geocode.push(url);
     const name = url.searchParams.get('name');

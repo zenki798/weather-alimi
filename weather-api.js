@@ -84,24 +84,30 @@
 
   /* ---------- 지명 ---------- */
 
-  /* Nominatim 주소 → 큰 단위부터 [도, 시, 구, 동] */
+  /*
+   * Nominatim 주소 → 큰 단위부터 [도, 시, 군·구, 읍·면, 동, 리].
+   * 시골은 읍·면(town)과 리(village)가 둘 다 온다. 하나만 고르면 리가 빠지므로 칸을 따로 둔다.
+   * 법정동(quarter)은 행정동(suburb)이 없을 때만 쓰고, 통·반(neighbourhood)은 쓰지 않는다.
+   */
   function regionParts(addr) {
     addr = addr || {};
     return [
       addr.province || addr.state,
       addr.city,
       addr.county || addr.borough || addr.city_district || addr.district,
-      addr.town || addr.suburb || addr.village || addr.quarter || addr.neighbourhood || addr.hamlet,
+      addr.town,
+      addr.suburb || addr.quarter,
+      addr.village || addr.hamlet,
     ].filter(Boolean).filter(function (p, i, a) { return a.indexOf(p) === i; });
   }
 
-  /* 좌표로 찾은 지점 → "중구 명동" 같은 짧은 이름과 보조 설명 */
+  /* 좌표로 찾은 지점 → "중구 명동", "상면 행현리" 같은 짧은 이름(끝 두 단위)과 나머지 설명 */
   function nameFromAddress(addr, fallbackName, displayName) {
     addr = addr || {};
     var parts = regionParts(addr);
     var name = parts.slice(-2).join(' ') || fallbackName || '';
     if (!name && displayName) name = displayName.split(',').slice(0, 2).join(',').trim();
-    var detail = [parts.length > 2 ? parts[0] : '', addr.country || ''].filter(Boolean).join(' · ');
+    var detail = [parts.slice(0, -2).join(' '), addr.country || ''].filter(Boolean).join(' · ');
     return { name: name || '이름 없는 지점', detail: detail };
   }
 

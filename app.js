@@ -26,6 +26,17 @@
   var searchSeq = 0;
   var hideChartTip = null;
 
+  /* 앱 모드: 홈 화면에 설치해서 실행한 경우. manifest 의 start_url 에 ?source=pwa 를 붙여 두었다. */
+  var APP_MODE = (function () {
+    try {
+      return window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: fullscreen)').matches ||
+        navigator.standalone === true ||
+        new URL(location.href).searchParams.get('source') === 'pwa';
+    } catch (e) { return false; }
+  })();
+  document.documentElement.classList.toggle('app-mode', APP_MODE);
+
   function $(id) { return document.getElementById(id); }
   function isAbort(err) { return err && err.name === 'AbortError'; }
   function setPhase(p) { document.documentElement.setAttribute('data-state', p); }
@@ -178,7 +189,7 @@
   /* 지도에서 찍은 지점: 이름은 모르니 좌표로 먼저 날씨를 받고, 이름은 따로 채운다 */
   function pickPoint(lat, lon) {
     hideCandidates();
-    loadPlace({ name: '선택한 위치', detail: '지명 확인 중…', lat: lat, lon: normLon(lon) }, { reverse: true });
+    loadPlace({ name: '선택한 위치', detail: '지명 확인 중…', lat: lat, lon: normLon(lon), pending: true }, { reverse: true });
   }
 
   /* ---------- 위치 → 날씨 ---------- */
@@ -192,7 +203,7 @@
     state.place = place;
     state.normals = null;
     state.normalsState = 'loading';
-    state.openDays = {};
+    if (!opts.keepOpen) state.openDays = {}; // 새로고침은 펼쳐 둔 날짜를 그대로 둔다
 
     placeMarker(place.lat, place.lon);
     if (opts.fly && map) {
@@ -209,6 +220,7 @@
         if (seq !== state.seq) return;
         place.name = n ? n.name : '선택한 위치';
         place.detail = n ? n.detail : '지명을 확인하지 못했습니다';
+        delete place.pending;
         renderPlace();
         save(STORE_PLACE, place);
       }, function () { /* 중단됨 */ });
@@ -220,7 +232,7 @@
       if (seq !== state.seq) return;
       state.data = data;
       $('results').classList.remove('is-busy');
-      setStatus('');
+      setStatus(opts.notice || '', opts.notice ? 'warn' : undefined);
       renderAll();
       setPhase('ready');
 
@@ -273,19 +285,38 @@
     box.hidden = false;
   }
 
+  function wait(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+
+  function showResult(list, notice) {
+    var first = list[0];
+    loadPlace({ name: first.name, detail: first.detail, lat: first.lat, lon: first.lon }, { fly: true, notice: notice });
+    showCandidates(list, 0);
+  }
+
+  function notFound(query) {
+    setStatus('“' + query + '”에 해당하는 지역을 찾지 못했습니다. 다른 이름으로 검색하거나 지도에서 직접 골라 보세요.', 'warn');
+  }
+
   function doSearch(query) {
     var seq = ++searchSeq;
     hideCandidates();
     setStatus('“' + query + '” 찾는 중…');
     API.search(query).then(function (list) {
-      if (seq !== searchSeq) return;
-      if (!list.length) {
-        setStatus('“' + query + '”에 해당하는 지역을 찾지 못했습니다. 다른 이름으로 검색하거나 지도에서 직접 골라 보세요.', 'warn');
-        return;
-      }
-      var first = list[0];
-      loadPlace({ name: first.name, detail: first.detail, lat: first.lat, lon: first.lon }, { fly: true });
-      showCandidates(list, 0);
+      if (seq !== searchSeq) return null;
+      if (list.length) { showResult(list); return null; }
+      /* 시골의 리·마을 이름은 지도 자료에 없을 때가 있다 → 마지막 낱말을 빼고(예: "가평군 상면") 한 번 더 */
+      var words = query.split(/\s+/);
+      if (words.length < 2) { notFound(query); return null; }
+      var missing = words[words.length - 1];
+      var broader = words.slice(0, -1).join(' ');
+      setStatus('“' + missing + '” 이름을 찾지 못해 “' + broader + '” 범위에서 다시 찾는 중…');
+      /* 지명 검색 서버(Nominatim)는 1초에 한 번까지만 쓸 수 있다 */
+      return wait(1100).then(function () { return API.search(broader); }).then(function (wider) {
+        if (seq !== searchSeq) return;
+        if (!wider.length) { notFound(query); return; }
+        showResult(wider, '“' + missing + '” 이름은 지도 자료에 없어서 “' + wider[0].name +
+          '” 날씨를 보여줍니다. 정확한 곳은 지도에서 눌러 주세요.');
+      });
     }).catch(function (err) {
       if (seq !== searchSeq) return;
       setStatus('지역 검색에 실패했습니다. 잠시 후 다시 시도해 주세요. (' + err.message + ')', 'error');
@@ -530,6 +561,34 @@
   }
 
   /*
+   * 기온 눈금 줄. 목록 맨 위에서 모든 날의 막대가 같이 쓰는 눈금을 보여준다.
+   * 양 끝 숫자는 막대 옆 최저·최고 자리에, 중간 눈금은 막대 위 같은 위치에 놓는다.
+   */
+  function scaleRow(lo, hi) {
+    var li = el('li', 'day-scale');
+    li.setAttribute('aria-hidden', 'true'); // 날마다 숫자가 따로 적혀 있으므로 화면 낭독에서는 뺀다
+    var row = el('div', 'day-row scale-row');
+    row.appendChild(el('span', 's-lab', '기온 눈금'));
+    var temp = el('span', 'd-temp');
+    temp.appendChild(el('span', 't-min', lo + '°'));
+    var axis = el('span', 'axis');
+    var span = Math.max(hi - lo, 1);
+    var step = span <= 8 ? 2 : span <= 20 ? 5 : 10;
+    for (var v = Math.floor(lo / step) * step + step; v < hi; v += step) {
+      var pos = (v - lo) / span * 100;
+      if (pos < 12 || pos > 88) continue; // 양 끝 숫자와 겹치지 않게
+      var tick = el('span', 'tick', v + '°');
+      tick.style.left = pos.toFixed(1) + '%';
+      axis.appendChild(tick);
+    }
+    temp.appendChild(axis);
+    temp.appendChild(el('span', 't-max', hi + '°'));
+    row.appendChild(temp);
+    li.appendChild(row);
+    return li;
+  }
+
+  /*
    * 일별 목록 (일주일·한달 공용). 막대 눈금은 목록 전체가 한 축을 쓴다.
    * 예보일은 오전·오후로 나눠 보여주고, 누르면 3시간 간격이 펼쳐진다.
    * 예년일(17일째~)은 예보가 없어 하루 요약 한 칸만 두고 펼치지 않는다.
@@ -541,6 +600,7 @@
     var lo = Math.floor(Math.min.apply(null, lows));
     var hi = Math.ceil(Math.max.apply(null, highs));
     var span = Math.max(hi - lo, 1);
+    list.appendChild(scaleRow(lo, hi));
 
     days.forEach(function (d, i) {
       if (d.kind === 'normal' && (i === 0 || days[i - 1].kind !== 'normal')) {
@@ -576,6 +636,10 @@
       row.appendChild(halves);
 
       var temp = el('span', 'd-temp');
+      if (num(d.tmin) && num(d.tmax)) {
+        temp.title = (d.kind === 'normal' ? '예년 평균 ' : '') + '최저 ' + fmtTemp(d.tmin) + ' · 최고 ' + fmtTemp(d.tmax) +
+          ' · 일교차 ' + Math.round(d.tmax - d.tmin) + '°';
+      }
       temp.appendChild(el('span', 't-min', fmtTemp(d.tmin)));
       var range = el('span', 'range');
       range.setAttribute('aria-hidden', 'true');
@@ -675,6 +739,46 @@
     selectTab(['day', 'week', 'month'].indexOf(saved) >= 0 ? saved : 'day');
   }
 
+  /* ---------- 앱 설치 안내 ----------
+   * 안드로이드 크롬: 설치할 수 있으면 beforeinstallprompt 가 온다 → "앱으로 설치" 버튼.
+   * 아이폰 사파리: 설치 API 가 없다 → 공유 메뉴에서 추가하는 방법을 글로 안내한다.
+   */
+  var INSTALL_KEY = 'weather.installHint.v1';
+  var installEvent = null;
+
+  function showInstall(text, withButton) {
+    if (APP_MODE || load(INSTALL_KEY) === 'off') return;
+    $('install-text').textContent = text;
+    $('install-btn').hidden = !withButton;
+    $('install-bar').hidden = false;
+  }
+
+  function initInstall() {
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      installEvent = e;
+      showInstall('홈 화면에 설치하면 주소창·툴바 없이 앱처럼 쓸 수 있어요.', true);
+    });
+    window.addEventListener('appinstalled', function () { $('install-bar').hidden = true; });
+    $('install-btn').addEventListener('click', function () {
+      if (!installEvent) return;
+      var done = function () { installEvent = null; $('install-bar').hidden = true; };
+      installEvent.prompt();
+      Promise.resolve(installEvent.userChoice).then(done, done);
+    });
+    $('install-close').addEventListener('click', function () {
+      $('install-bar').hidden = true;
+      save(INSTALL_KEY, 'off');
+    });
+    /* 아이패드 사파리는 Mac 처럼 자신을 밝힌다(User-Agent 에 iPad 가 없다) → 터치 지점 수로 가려낸다 */
+    var ipad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    var ios = ipad || /iPhone|iPod/.test(navigator.userAgent);
+    /* file:// 로 연 페이지는 홈 화면에 추가해도 소용없다 (크롬은 file:// 도 isSecureContext 로 본다) */
+    if (ios && window.isSecureContext && location.protocol !== 'file:') {
+      showInstall('앱처럼 쓰려면: 사파리 ' + (ipad ? '오른쪽 위' : '아래쪽') + ' 공유 버튼(□↑) → "홈 화면에 추가"', false);
+    }
+  }
+
   /* ---------- 시작 ---------- */
 
   function init() {
@@ -716,6 +820,18 @@
       }, 150);
     });
 
+    /* 앱 화면에는 브라우저 새로고침이 없으므로 날씨만 새로 받는 버튼을 둔다 (위치·탭·펼친 날짜는 그대로) */
+    $('refreshBtn').addEventListener('click', function () {
+      if (state.place) loadPlace(state.place, { keepOpen: true, reverse: !!state.place.pending });
+    });
+
+    initInstall();
+
+    /* 서비스 워커: 설치 조건을 채우고 오프라인에서도 화면을 띄운다. file:// 에서는 쓸 수 없다. */
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* 실패해도 페이지는 동작한다 */ });
+    }
+
     var saved = load(STORE_PLACE);
     loadPlace(validPlace(saved) ? saved : DEFAULT_PLACE, { fly: true, initial: true });
   }
@@ -725,6 +841,7 @@
     state: state,
     map: function () { return map; },
     marker: function () { return marker; },
+    appMode: APP_MODE,
   };
 
   init();
