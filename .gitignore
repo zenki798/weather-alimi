@@ -1,0 +1,33 @@
+# 의존성
+node_modules/
+
+# Playwright 산출물
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# Pages 배포용 임시 폴더 (CI 에서 생성)
+_site/
+
+# 환경변수 · 비밀정보 (AGENTS.md 규칙 2)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# 로그
+*.log
+npm-debug.log*

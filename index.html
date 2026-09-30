@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>날씨알리미</title>
+  <meta name="description" content="지역명을 검색하거나 지도에서 위치를 찍어 하루·일주일·한달 날씨를 봅니다.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%A6%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f4f6f8;
+      --surface: #fcfcfb;
+      --surface-2: #f0efec;
+      --ink: #0b0b0b;
+      --ink-2: #52514e;
+      --muted: #6f6d68;
+      --grid: #e1e0d9;
+      --axis: #c3c2b7;
+      --border: rgba(11, 11, 11, 0.10);
+      --accent: #2a78d6;
+      --accent-ink: #1c5cab;
+      --accent-wash: rgba(42, 120, 214, 0.10);
+      --normal-fill: #86b6ef;
+      --normal-hatch: #cde2fb;
+      --warn-bg: #fff4d6;
+      --warn-ink: #6b4a00;
+      --error-bg: #fde8e8;
+      --error-ink: #8a1f1f;
+      --radius: 14px;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.05);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --page: #0d0d0d;
+        --surface: #1a1a19;
+        --surface-2: #262624;
+        --ink: #ffffff;
+        --ink-2: #c3c2b7;
+        --muted: #9a988f;
+        --grid: #2c2c2a;
+        --axis: #383835;
+        --border: rgba(255, 255, 255, 0.10);
+        --accent: #3987e5;
+        --accent-ink: #86b6ef;
+        --accent-wash: rgba(57, 135, 229, 0.14);
+        --normal-fill: #256abf;
+        --normal-hatch: #184f95;
+        --warn-bg: #3a2f10;
+        --warn-ink: #f5d68a;
+        --error-bg: #3a1616;
+        --error-ink: #f4b3b3;
+        --shadow: none;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #262624;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #9a988f;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent: #3987e5;
+      --accent-ink: #86b6ef;
+      --accent-wash: rgba(57, 135, 229, 0.14);
+      --normal-fill: #256abf;
+      --normal-hatch: #184f95;
+      --warn-bg: #3a2f10;
+      --warn-ink: #f5d68a;
+      --error-bg: #3a1616;
+      --error-ink: #f4b3b3;
+      --shadow: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    }
+    button, input { font: inherit; color: inherit; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+
+    header.top { margin-bottom: 16px; }
+    header.top h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+    header.top p { margin: 2px 0 0; color: var(--ink-2); font-size: 14px; }
+
+    .layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+    @media (min-width: 900px) {
+      .layout { grid-template-columns: 420px minmax(0, 1fr); align-items: start; }
+      .side { position: sticky; top: 16px; }
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    /* 검색 */
+    .search { display: flex; gap: 8px; }
+    .search input {
+      flex: 1; min-width: 0;
+      padding: 11px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .search input:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    .btn {
+      padding: 10px 16px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn.ghost { background: var(--surface); color: var(--ink); border-color: var(--border); font-weight: 500; }
+    .btn:hover { filter: brightness(1.06); }
+
+    .candidates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 13px; }
+    .candidates[hidden] { display: none; }
+    .candidates .label { color: var(--muted); margin-right: 2px; }
+    .chip {
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      cursor: pointer;
+      max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-wash); font-weight: 600; }
+
+    /* 지도 */
+    .map-card { margin-top: 12px; overflow: hidden; position: relative; }
+    #map { height: 300px; background: var(--surface-2); }
+    @media (min-width: 900px) { #map { height: 440px; } }
+    #map.map-failed { display: grid; place-items: center; padding: 24px; color: var(--ink-2); text-align: center; }
+    .map-tools { position: absolute; right: 10px; bottom: 26px; z-index: 500; }
+    .map-hint { margin: 8px 2px 0; font-size: 13px; color: var(--muted); }
+    .pin {
+      width: 26px; height: 26px;
+      background: var(--accent);
+      border: 3px solid #fff;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    }
+
+    /* 상태 메시지 */
+    .status { min-height: 0; margin-bottom: 12px; }
+    .status:empty { display: none; }
+    .status .msg { padding: 10px 14px; border-radius: 10px; background: var(--surface-2); color: var(--ink-2); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .status .msg.warn { background: var(--warn-bg); color: var(--warn-ink); }
+    .status .msg.error { background: var(--error-bg); color: var(--error-ink); }
+
+    .results { transition: opacity .2s; }
+    .results.is-busy { opacity: 0.5; }
+
+    /* 현재 날씨 */
+    .current { padding: 18px 20px; }
+    .place { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+    .place h2 { margin: 0; font-size: 20px; }
+    .place .detail { color: var(--ink-2); font-size: 13px; }
+    .place .coords { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .now { display: flex; align-items: center; gap: 16px; margin: 14px 0 16px; flex-wrap: wrap; }
+    .now .icon { font-size: 52px; line-height: 1; }
+    .now .temp { font-size: 56px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+    .now .desc { font-size: 17px; font-weight: 600; }
+    .now .sub { color: var(--ink-2); font-size: 13px; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    @media (max-width: 560px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .stat { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+    .stat .k { font-size: 12px; color: var(--ink-2); }
+    .stat .v { font-size: 18px; font-weight: 600; }
+    .stat .s { font-size: 12px; color: var(--muted); }
+
+    /* 탭 */
+    .tabs { display: flex; gap: 4px; margin: 16px 0 10px; background: var(--surface-2); padding: 4px; border-radius: 12px; }
+    .tab {
+      flex: 1; padding: 9px 0;
+      border: 0; border-radius: 9px;
+      background: transparent;
+      color: var(--ink-2);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+    .panel { padding: 16px; }
+    .panel[hidden] { display: none; }
+    .panel h3 { margin: 0 0 4px; font-size: 16px; }
+    .panel .note { margin: 0 0 12px; font-size: 13px; color: var(--ink-2); }
+    .panel .note.warn { color: var(--warn-ink); background: var(--warn-bg); padding: 8px 10px; border-radius: 8px; }
+
+    /* 하루 — 기온 차트 */
+    .chart { position: relative; margin: 4px 0 12px; }
+    .chart svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+    .chart svg:focus { outline: none; }
+    .chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
+    .chart .grid { stroke: var(--grid); stroke-width: 1; }
+    .chart .axis-text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+    .chart .area { fill: var(--accent-wash); stroke: none; }
+    .chart .dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+    .chart .extreme-text { fill: var(--ink); font-size: 12px; font-weight: 600; }
+    .chart .cross { stroke: var(--axis); stroke-width: 1; }
+    .tooltip {
+      position: absolute; top: 0; z-index: 5;
+      pointer-events: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+      padding: 8px 10px;
+      font-size: 12px;
+      min-width: 132px;
+    }
+    .tooltip[hidden] { display: none; }
+    .tooltip .tt-time { color: var(--ink-2); }
+    .tooltip .tt-val { font-size: 18px; font-weight: 700; }
+    .tooltip .tt-row { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-2); }
+    .tooltip .tt-row b { color: var(--ink); font-weight: 600; }
+
+    .hours { list-style: none; margin: 0; padding: 0 0 6px; display: flex; gap: 6px; overflow-x: auto; scroll-snap-type: x proximity; }
+    .hour {
+      flex: 0 0 76px; scroll-snap-align: start;
+      background: var(--surface-2); border-radius: 10px;
+      padding: 8px 6px; text-align: center; font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .hour .h-time { color: var(--ink-2); }
+    .hour .h-icon { font-size: 22px; line-height: 1.4; }
+    .hour .h-temp { font-size: 16px; font-weight: 700; }
+    .hour .h-meta { color: var(--ink-2); line-height: 1.35; }
+
+    /* 일주일·한달 — 일별 목록 */
+    .days { list-style: none; margin: 0; padding: 0; }
+    .day {
+      display: grid;
+      grid-template-columns: 64px 120px minmax(120px, 1fr) 232px;
+      grid-template-areas: "date sky temp meta";
+      align-items: center; gap: 12px;
+      padding: 10px 4px;
+      border-top: 1px solid var(--grid);
+      font-variant-numeric: tabular-nums;
+    }
+    .day:first-child { border-top: 0; }
+    .d-date { grid-area: date; }
+    .d-date b { display: block; font-size: 14px; }
+    .d-date span { font-size: 12px; color: var(--muted); }
+    .d-sky { grid-area: sky; display: flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+    .d-sky .i { font-size: 22px; }
+    .d-sky .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .d-temp { grid-area: temp; display: flex; align-items: center; gap: 8px; }
+    .d-temp .t-min { width: 34px; text-align: right; color: var(--ink-2); }
+    .d-temp .t-max { width: 34px; font-weight: 700; }
+    .range { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--surface-2); }
+    .range-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); min-width: 6px; }
+    .day[data-kind="normal"] .range-fill {
+      background: repeating-linear-gradient(45deg, var(--normal-fill) 0 3px, var(--normal-hatch) 3px 6px);
+    }
+    .d-meta { grid-area: meta; display: flex; gap: 10px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
+    .d-meta span { white-space: nowrap; }
+    .badge {
+      display: inline-block; margin-left: 4px; padding: 0 6px;
+      border-radius: 6px; background: var(--surface-2); color: var(--ink-2);
+      font-size: 11px; font-weight: 600; vertical-align: 1px;
+    }
+    .normal-divider {
+      margin: 8px 0 2px; padding: 8px 10px;
+      border-radius: 8px; background: var(--surface-2);
+      font-size: 12px; color: var(--ink-2);
+    }
+    @media (max-width: 720px) {
+      .day {
+        grid-template-columns: 52px 30px minmax(0, 1fr);
+        grid-template-areas: "date sky temp" "date sky meta";
+        row-gap: 4px; column-gap: 10px;
+      }
+      .d-sky .t { display: none; }
+      .d-meta { gap: 8px; }
+    }
+
+    footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
+    footer a { color: inherit; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <h1>🌦️ 날씨알리미</h1>
+      <p>지역명을 검색하거나 지도에서 원하는 곳을 눌러 하루 · 일주일 · 한달 날씨를 확인하세요.</p>
+    </header>
+
+    <div class="layout">
+      <section class="side" aria-label="위치 선택">
+        <form id="searchForm" class="search" role="search" autocomplete="off">
+          <label for="q" class="sr-only">지역명</label>
+          <input id="q" type="search" placeholder="지역명 예: 강남구, 해운대, 제주시" enterkeyhint="search">
+          <button class="btn" type="submit">검색</button>
+        </form>
+        <div id="candidates" class="candidates" hidden></div>
+
+        <div class="card map-card">
+          <div id="map" role="application" aria-label="지도 — 누르면 그 위치의 날씨를 봅니다"></div>
+          <div class="map-tools">
+            <button id="locateBtn" class="btn ghost" type="button">📍 내 위치</button>
+          </div>
+        </div>
+        <p class="map-hint">지도를 누르면 핀이 꽂히고, 핀을 끌어 옮기면 그 지점의 날씨로 바뀝니다.</p>
+      </section>
+
+      <section aria-label="날씨">
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+
+        <div id="results" class="results">
+          <article id="current" class="card current" aria-labelledby="placeName">
+            <div class="place">
+              <div>
+                <h2 id="placeName">위치를 고르는 중…</h2>
+                <div id="placeDetail" class="detail"></div>
+              </div>
+              <div class="coords"><span id="coords"></span> <span id="obsTime"></span></div>
+            </div>
+            <div class="now">
+              <div id="nowIcon" class="icon" aria-hidden="true">⏳</div>
+              <div>
+                <div id="nowTemp" class="temp">–</div>
+              </div>
+              <div>
+                <div id="nowDesc" class="desc">불러오는 중</div>
+                <div id="nowFeels" class="sub"></div>
+              </div>
+            </div>
+            <div class="stats">
+              <div class="stat"><div class="k">습도</div><div id="nowHumidity" class="v">–</div><div class="s">상대습도</div></div>
+              <div class="stat"><div class="k">풍속</div><div id="nowWind" class="v">–</div><div id="nowWindDir" class="s"></div></div>
+              <div class="stat"><div class="k">오늘 강수확률</div><div id="nowPop" class="v">–</div><div id="nowPrecip" class="s"></div></div>
+              <div class="stat"><div class="k">오늘 최고 / 최저</div><div id="nowRange" class="v">–</div><div class="s">기온</div></div>
+            </div>
+          </article>
+
+          <div class="tabs" role="tablist" aria-label="예보 기간">
+            <button class="tab" role="tab" id="tab-day" data-tab="day" aria-controls="panel-day" aria-selected="true">하루</button>
+            <button class="tab" role="tab" id="tab-week" data-tab="week" aria-controls="panel-week" aria-selected="false" tabindex="-1">일주일</button>
+            <button class="tab" role="tab" id="tab-month" data-tab="month" aria-controls="panel-month" aria-selected="false" tabindex="-1">한달</button>
+          </div>
+
+          <section id="panel-day" class="card panel" role="tabpanel" aria-labelledby="tab-day">
+            <h3>앞으로 24시간 기온</h3>
+            <p class="note">그래프를 가리키거나 누르면 시간별 값이 보입니다. 키보드는 방향키로 움직입니다.</p>
+            <div id="dayChart" class="chart"></div>
+            <ul id="hourList" class="hours" aria-label="시간별 날씨"></ul>
+          </section>
+
+          <section id="panel-week" class="card panel" role="tabpanel" aria-labelledby="tab-week" hidden>
+            <h3>7일 예보</h3>
+            <p class="note">막대는 하루의 최저~최고 기온 범위입니다.</p>
+            <ul id="weekList" class="days"></ul>
+          </section>
+
+          <section id="panel-month" class="card panel" role="tabpanel" aria-labelledby="tab-month" hidden>
+            <h3>30일 날씨</h3>
+            <p id="monthNote" class="note"></p>
+            <ul id="monthList" class="days"></ul>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      날씨 데이터: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0) ·
+      지도·지명: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors ·
+      풍속 단위 m/s, 시각은 선택한 지역의 현지 시간
+    </footer>
+  </div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="weather-api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
