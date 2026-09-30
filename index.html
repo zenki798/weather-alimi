@@ -151,6 +151,18 @@
     @media (min-width: 900px) { #map { height: 440px; } }
     #map.map-failed { display: grid; place-items: center; padding: 24px; color: var(--ink-2); text-align: center; }
     .map-tools { position: absolute; right: 10px; bottom: 26px; z-index: 500; }
+    .map-notice {
+      position: absolute; left: 50%; top: 50%; z-index: 600;
+      transform: translate(-50%, -50%);
+      width: min(300px, calc(100% - 32px));
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+      font-size: 13px; color: var(--ink-2); text-align: center;
+    }
+    .map-notice[hidden] { display: none; }
     .map-hint { margin: 8px 2px 0; font-size: 13px; color: var(--muted); }
     .pin {
       width: 26px; height: 26px;
@@ -247,24 +259,33 @@
     .hour .h-temp { font-size: 16px; font-weight: 700; }
     .hour .h-meta { color: var(--ink-2); line-height: 1.35; }
 
-    /* 일주일·한달 — 일별 목록 */
+    /* 일주일·한달 — 일별 목록. 폭은 화면이 아니라 목록 칸 폭(container query)으로 나눈다. */
+    .panel { container-type: inline-size; }
     .days { list-style: none; margin: 0; padding: 0; }
-    .day {
-      display: grid;
-      grid-template-columns: 64px 120px minmax(120px, 1fr) 232px;
-      grid-template-areas: "date sky temp meta";
-      align-items: center; gap: 12px;
-      padding: 10px 4px;
-      border-top: 1px solid var(--grid);
-      font-variant-numeric: tabular-nums;
-    }
+    .day { border-top: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
     .day:first-child { border-top: 0; }
+    .day-row {
+      display: grid;
+      grid-template-columns: 60px 184px minmax(0, 1fr) 14px;
+      grid-template-areas: "date halves temp chev" "date meta meta chev";
+      align-items: center; row-gap: 2px; column-gap: 12px;
+      width: 100%;
+      padding: 10px 4px;
+      border: 0; border-radius: 8px;
+      background: none; color: inherit; font: inherit; text-align: left;
+    }
+    button.day-row { cursor: pointer; }
+    button.day-row:hover { background: var(--surface-2); }
     .d-date { grid-area: date; }
     .d-date b { display: block; font-size: 14px; }
-    .d-date span { font-size: 12px; color: var(--muted); }
-    .d-sky { grid-area: sky; display: flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
-    .d-sky .i { font-size: 22px; }
-    .d-sky .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .d-date .d-md { display: block; font-size: 12px; color: var(--muted); }
+    .d-halves { grid-area: halves; display: flex; gap: 10px; min-width: 0; }
+    .half { flex: none; display: flex; align-items: center; gap: 4px; font-size: 12px; }
+    .half .h-lab { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .half .i { font-size: 20px; line-height: 1.1; }
+    .half .h-pop { color: var(--ink-2); min-width: 28px; }
+    .half.whole { flex: 1; min-width: 0; font-size: 13px; gap: 6px; }
+    .half.whole .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .d-temp { grid-area: temp; display: flex; align-items: center; gap: 8px; }
     .d-temp .t-min { width: 34px; text-align: right; color: var(--ink-2); }
     .d-temp .t-max { width: 34px; font-weight: 700; }
@@ -275,6 +296,10 @@
     }
     .d-meta { grid-area: meta; display: flex; gap: 10px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
     .d-meta span { white-space: nowrap; }
+    .chev { grid-area: chev; color: var(--muted); font-size: 12px; transition: transform .15s; }
+    button.day-row[aria-expanded="true"] .chev { transform: rotate(180deg); }
+    .slots-panel { padding: 2px 4px 12px; }
+    .slots-panel[hidden] { display: none; }
     .badge {
       display: inline-block; margin-left: 4px; padding: 0 6px;
       border-radius: 6px; background: var(--surface-2); color: var(--ink-2);
@@ -285,13 +310,15 @@
       border-radius: 8px; background: var(--surface-2);
       font-size: 12px; color: var(--ink-2);
     }
-    @media (max-width: 720px) {
-      .day {
-        grid-template-columns: 52px 30px minmax(0, 1fr);
-        grid-template-areas: "date sky temp" "date sky meta";
+    @container (max-width: 480px) {
+      .day-row {
+        grid-template-columns: 46px 92px minmax(0, 1fr) 12px;
+        grid-template-areas: "date halves temp chev" "date meta meta chev";
         row-gap: 4px; column-gap: 10px;
       }
-      .d-sky .t { display: none; }
+      .d-halves { gap: 6px; }
+      .half { flex-direction: column; gap: 1px; width: 43px; }
+      .half.whole { flex-direction: row; width: auto; }
       .d-meta { gap: 8px; }
     }
 
@@ -318,6 +345,7 @@
 
         <div class="card map-card">
           <div id="map" role="application" aria-label="지도 — 누르면 그 위치의 날씨를 봅니다"></div>
+          <div id="mapNotice" class="map-notice" role="status" hidden></div>
           <div class="map-tools">
             <button id="locateBtn" class="btn ghost" type="button">📍 내 위치</button>
           </div>
@@ -370,7 +398,7 @@
 
           <section id="panel-week" class="card panel" role="tabpanel" aria-labelledby="tab-week" hidden>
             <h3>7일 예보</h3>
-            <p class="note">막대는 하루의 최저~최고 기온 범위입니다.</p>
+            <p class="note">오전·오후 날씨와 강수확률입니다. 날짜를 누르면 3시간 간격 예보가 펼쳐집니다. 막대는 하루의 최저~최고 기온입니다.</p>
             <ul id="weekList" class="days"></ul>
           </section>
 

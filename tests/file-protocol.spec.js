@@ -18,6 +18,28 @@ test.describe('file:// 로 직접 열었을 때', () => {
     expect(calls.unexpected).toEqual([]);
   });
 
+  /*
+   * OSM 공식 서버는 Referer 없는 브라우저 요청에 "Access blocked" 그림을 정상 응답(200)으로 준다.
+   * file:// 에는 Referer 가 없으므로 공식 서버를 아예 부르지 않아야 한다. (2026-09-30 사용자 화면에서 발생)
+   */
+  test('file:// 에서는 OSM 공식 타일 서버를 부르지 않고 HOT 서버를 쓴다', async ({ page }) => {
+    const calls = await open(page, { url: FILE_URL });
+    await expect(page.locator('#map')).toHaveAttribute('data-tiles', 'osm-hot');
+    await expect.poll(() => calls.tiles.length).toBeGreaterThan(0);
+    expect(calls.tiles.filter((u) => u.includes('tile.openstreetmap.org'))).toEqual([]);
+    expect(calls.tiles.every((u) => u.includes('.tile.openstreetmap.fr/hot/'))).toBe(true);
+    await expect(page.locator('.leaflet-control-attribution')).toContainText('OpenStreetMap');
+    await expect(page.locator('.leaflet-control-attribution')).toContainText('HOT');
+  });
+
+  test('file:// 에서 HOT 서버가 막히면 OSM 독일 서버로 넘어간다', async ({ page }) => {
+    const calls = await open(page, { url: FILE_URL, failTiles: ['openstreetmap.fr'] });
+    await expect(page.locator('#map')).toHaveAttribute('data-tiles', 'osm-de');
+    await expect.poll(() => calls.tiles.filter((u) => u.includes('tile.openstreetmap.de')).length).toBeGreaterThan(0);
+    await expect(page.locator('#mapNotice')).toBeHidden();
+    expect(calls.tiles.filter((u) => u.includes('tile.openstreetmap.org'))).toEqual([]);
+  });
+
   test('검색과 지도 누르기가 file:// 에서도 동작한다', async ({ page }) => {
     await open(page, { url: FILE_URL });
     await page.locator('#q').fill('강남구');

@@ -204,10 +204,92 @@
     return getJSON(url, signal).then(normalizeForecast);
   }
 
+  /* 가장 흔한 값. 동률이면 큰 코드(더 흐리거나 궂은 쪽)를 고른다. */
+  function modeOf(list) {
+    var count = {};
+    var best = null;
+    list.forEach(function (c) { count[c] = (count[c] || 0) + 1; });
+    Object.keys(count).forEach(function (k) {
+      var c = Number(k);
+      if (best === null || count[k] > count[best] || (count[k] === count[best] && c > best)) best = c;
+    });
+    return best;
+  }
+
+  /*
+   * 여러 시간의 기상 코드를 하나로. 비·눈 코드(51 이상)가 minWet 시간 이상이면 그중 가장 흔한 것,
+   * 아니면 비 아닌 코드 중 가장 흔한 것. 한두 시간 이슬비로 반나절 전체를 "비" 로 만들지 않기 위해서다.
+   */
+  function summarizeCodes(codes, minWet) {
+    codes = codes.filter(function (c) { return c != null; });
+    if (!codes.length) return null;
+    var wet = codes.filter(function (c) { return c >= 51; });
+    var dry = codes.filter(function (c) { return c < 51; });
+    if (wet.length >= minWet || !dry.length) return modeOf(wet);
+    return modeOf(dry);
+  }
+
+  function maxOf(list) {
+    var xs = list.filter(function (x) { return typeof x === 'number' && !isNaN(x); });
+    return xs.length ? Math.max.apply(null, xs) : null;
+  }
+  function minOf(list) {
+    var xs = list.filter(function (x) { return typeof x === 'number' && !isNaN(x); });
+    return xs.length ? Math.min.apply(null, xs) : null;
+  }
+
+  /* 오전(0~11시)·오후(12~23시) 요약 — 기상청 중기예보와 같은 구분 */
+  function summarizeHalf(list) {
+    if (!list.length) return null;
+    var code = summarizeCodes(list.map(function (x) { return x.code; }), Math.max(2, Math.ceil(list.length / 4)));
+    return {
+      code: code,
+      sky: describe(code),
+      pop: maxOf(list.map(function (x) { return x.pop; })),
+      tmin: minOf(list.map(function (x) { return x.temp; })),
+      tmax: maxOf(list.map(function (x) { return x.temp; })),
+    };
+  }
+
+  /* 3시간 간격(0·3·…·21시). 기온·습도·바람은 그 시각 값, 날씨·강수확률은 3시간 중 궂은 쪽 */
+  function threeHourSlots(list) {
+    var slots = [];
+    for (var s = 0; s < 24; s += 3) {
+      var part = list.filter(function (x) { return x.hour >= s && x.hour < s + 3; });
+      if (!part.length) continue;
+      var at = part[0];
+      var code = summarizeCodes(part.map(function (x) { return x.code; }), 1);
+      slots.push({
+        time: at.time,
+        hour: s,
+        temp: at.temp,
+        humidity: at.humidity,
+        wind: at.wind,
+        code: code,
+        sky: describe(code),
+        pop: maxOf(part.map(function (x) { return x.pop; })),
+      });
+    }
+    return slots;
+  }
+
   function normalizeForecast(d) {
     var c = d.current || {};
     var h = d.hourly || { time: [] };
     var dy = d.daily || { time: [] };
+
+    function hourAt(i) {
+      return {
+        time: h.time[i],
+        hour: Number(h.time[i].slice(11, 13)),
+        temp: h.temperature_2m[i],
+        humidity: h.relative_humidity_2m[i],
+        wind: h.wind_speed_10m[i],
+        windDeg: h.wind_direction_10m ? h.wind_direction_10m[i] : null,
+        code: h.weather_code[i],
+        pop: h.precipitation_probability ? h.precipitation_probability[i] : null,
+      };
+    }
 
     /* 현재 시각이 속한 정시부터 24시간. 시각 문자열은 현지 시간 "YYYY-MM-DDTHH:mm" */
     var nowHour = String(c.time || '').slice(0, 13);
@@ -215,19 +297,17 @@
     if (start < 0) start = 0;
 
     var hours = [];
-    for (var i = start; i < Math.min(start + 24, h.time.length); i++) {
-      hours.push({
-        time: h.time[i],
-        temp: h.temperature_2m[i],
-        humidity: h.relative_humidity_2m[i],
-        wind: h.wind_speed_10m[i],
-        windDeg: h.wind_direction_10m ? h.wind_direction_10m[i] : null,
-        code: h.weather_code[i],
-        pop: h.precipitation_probability ? h.precipitation_probability[i] : null,
-      });
-    }
+    for (var i = start; i < Math.min(start + 24, h.time.length); i++) hours.push(hourAt(i));
+
+    /* 날짜별로 묶는다. 서머타임이 있는 지역은 하루가 23·25시간이라 "24개씩" 자르면 어긋난다. */
+    var byDate = {};
+    h.time.forEach(function (t, k) {
+      var key = t.slice(0, 10);
+      (byDate[key] = byDate[key] || []).push(hourAt(k));
+    });
 
     var days = dy.time.map(function (date, j) {
+      var list = byDate[date] || [];
       return {
         date: date,
         kind: 'forecast',
@@ -240,6 +320,9 @@
         windDeg: dy.wind_direction_10m_dominant ? dy.wind_direction_10m_dominant[j] : null,
         precip: dy.precipitation_sum[j],
         pop: dy.precipitation_probability_max ? dy.precipitation_probability_max[j] : null,
+        am: summarizeHalf(list.filter(function (x) { return x.hour < 12; })),
+        pm: summarizeHalf(list.filter(function (x) { return x.hour >= 12; })),
+        slots: threeHourSlots(list),
       };
     });
 
@@ -408,6 +491,8 @@
     _shiftYear: shiftYear,
     _nameFromAddress: nameFromAddress,
     _normalSky: normalSky,
+    _summarizeCodes: summarizeCodes,
+    _normalizeForecast: normalizeForecast,
     _distanceKm: distanceKm,
     _codes: Object.keys(WMO).map(Number),
   };

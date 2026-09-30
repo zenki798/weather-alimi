@@ -140,3 +140,27 @@ test.describe('내 위치 버튼', () => {
     expect(calls.forecast.length).toBe(before);
   });
 });
+
+test.describe('지도 그림(타일) 서버', () => {
+  test('웹 주소(http)로 열면 OSM 공식 서버를 쓴다', async ({ page }) => {
+    const calls = await open(page);
+    await expect(page.locator('#map')).toHaveAttribute('data-tiles', 'osm');
+    await expect.poll(() => calls.tiles.filter((u) => u.startsWith('https://tile.openstreetmap.org/')).length).toBeGreaterThan(0);
+    await expect(page.locator('#mapNotice')).toBeHidden();
+    await expect(page.locator('.leaflet-control-attribution')).toContainText('OpenStreetMap');
+  });
+
+  test('지도 서버가 모두 막히면 차례로 바꿔 보다가 안내를 띄우고, 날씨는 그대로 쓸 수 있다', async ({ page }) => {
+    const calls = await open(page, { failTiles: ['openstreetmap'] });
+    await expect(page.locator('#map')).toHaveAttribute('data-tiles', 'none');
+    await expect(page.locator('#mapNotice')).toBeVisible();
+    await expect(page.locator('#mapNotice')).toContainText('지도 그림을 불러오지 못했습니다');
+
+    const hosts = [...new Set(calls.tiles.map((u) => new URL(u).hostname.replace(/^[abc]\./, '')))];
+    expect(hosts).toEqual(['tile.openstreetmap.org', 'tile.openstreetmap.fr', 'tile.openstreetmap.de']);
+
+    await page.locator('#q').fill('강남구');
+    await page.locator('#q').press('Enter');
+    await expect(page.locator('#placeName')).toHaveText('강남구');
+  });
+});

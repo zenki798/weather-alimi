@@ -1,5 +1,5 @@
 {
-  "name": "weather-notifier",
+  "name": "weather-alimi",
   "version": "0.1.0",
   "private": true,
   "description": "지역명 검색이나 지도 핀으로 하루·일주일·한달 날씨를 보는 페이지",

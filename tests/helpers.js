@@ -30,6 +30,11 @@ const r1 = (v) => Math.round(v * 10) / 10;
 /* 위도가 달라지면 기온도 달라지게 해서 "다른 곳을 골랐다" 가 값으로 드러나게 한다 */
 function baseTemp(lat) { return Math.round((40 - lat) * 2 + 10); }
 
+/* 시간별 가짜 값 — 테스트가 기대값을 같은 식으로 계산할 수 있게 밖으로 낸다 */
+function hourTemp(lat, d, h) { return r1(baseTemp(lat) + 5 * Math.sin(((h - 9) / 24) * 2 * Math.PI) + d * 0.1); }
+function hourCode(d, h) { return [0, 1, 2, 3, 61][(d + h) % 5]; }
+function hourPop(h) { return (h * 7) % 100; }
+
 const DAILY_CODES = [0, 2, 3, 61, 63, 71, 95, 1, 45, 80, 0, 2, 3, 81, 1, 0];
 
 function forecastFixture(lat, lon) {
@@ -41,12 +46,12 @@ function forecastFixture(lat, lon) {
   for (let d = 0; d < 16; d++) {
     for (let h = 0; h < 24; h++) {
       hourly.time.push(addDays(TODAY, d) + 'T' + pad(h) + ':00');
-      hourly.temperature_2m.push(r1(b + 5 * Math.sin(((h - 9) / 24) * 2 * Math.PI) + d * 0.1));
+      hourly.temperature_2m.push(hourTemp(lat, d, h));
       hourly.relative_humidity_2m.push(50 + (h % 5) * 5);
-      hourly.weather_code.push([0, 1, 2, 3, 61][(d + h) % 5]);
+      hourly.weather_code.push(hourCode(d, h));
       hourly.wind_speed_10m.push(r1(1.5 + (h % 4) * 0.7));
       hourly.wind_direction_10m.push((h * 15) % 360);
-      hourly.precipitation_probability.push((h * 7) % 100);
+      hourly.precipitation_probability.push(hourPop(h));
     }
   }
   const daily = {
@@ -150,9 +155,11 @@ const REVERSE = {
  * @param {boolean} [opt.failArchive]     평년 자료를 500 으로
  * @param {number}  [opt.failForecastTimes] 처음 N 번의 예보 요청을 500 으로
  * @param {(lat:number)=>number} [opt.forecastDelay] 위도별 응답 지연(ms)
+ * @param {number}  [opt.archiveDelay]    예년 자료 응답 지연(ms)
+ * @param {string[]} [opt.failTiles]      이 문자열이 주소에 든 지도 타일 요청을 실패시킨다
  */
 async function mockApis(page, opt = {}) {
-  const calls = { forecast: [], archive: [], search: [], reverse: [], geocode: [], unexpected: [] };
+  const calls = { forecast: [], archive: [], search: [], reverse: [], geocode: [], tiles: [], unexpected: [] };
   let forecastFails = opt.failForecastTimes || 0;
 
   /* 목록에 없는 외부 요청은 막고 기록한다. 뒤에 등록한 route 가 먼저 적용된다. */
@@ -161,8 +168,16 @@ async function mockApis(page, opt = {}) {
     return route.abort();
   });
 
-  await page.route('https://tile.openstreetmap.org/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'image/png', body: PNG, headers: CORS }));
+  /* 지도 타일: OSM 공식 · OSM France(HOT) · OSM 독일 */
+  const tile = (route) => {
+    const url = route.request().url();
+    calls.tiles.push(url);
+    if ((opt.failTiles || []).some((s) => url.includes(s))) return route.abort('connectionrefused');
+    return route.fulfill({ status: 200, contentType: 'image/png', body: PNG, headers: CORS });
+  };
+  await page.route('https://tile.openstreetmap.org/**', tile);
+  await page.route('https://*.tile.openstreetmap.fr/**', tile);
+  await page.route('https://tile.openstreetmap.de/**', tile);
 
   await page.route('https://api.open-meteo.com/v1/forecast?**', async (route) => {
     const url = new URL(route.request().url());
@@ -184,9 +199,18 @@ async function mockApis(page, opt = {}) {
     return route.fulfill({ json: forecastFixture(lat, lon), headers: CORS });
   });
 
-  await page.route('https://archive-api.open-meteo.com/v1/archive?**', (route) => {
+  await page.route('https://archive-api.open-meteo.com/v1/archive?**', async (route) => {
     const url = new URL(route.request().url());
     calls.archive.push(url);
+    if (opt.archiveDelay) {
+      await new Promise((r) => setTimeout(r, opt.archiveDelay));
+      if (!opt.failArchive) {
+        return route.fulfill({
+          json: archiveFixture(url.searchParams.get('start_date'), url.searchParams.get('end_date')),
+          headers: CORS,
+        }).catch(() => {});
+      }
+    }
     if (opt.failArchive) return route.fulfill({ status: 500, headers: CORS, body: '{"error":true}' });
     return route.fulfill({
       json: archiveFixture(url.searchParams.get('start_date'), url.searchParams.get('end_date')),
@@ -261,6 +285,6 @@ async function latLngAt(page, x, y) {
 }
 
 module.exports = {
-  TODAY, FILE_URL, baseTemp, addDays,
+  TODAY, FILE_URL, baseTemp, hourTemp, hourCode, hourPop, addDays,
   mockApis, collectErrors, waitReady, waitMapIdle, open, latLngAt,
 };

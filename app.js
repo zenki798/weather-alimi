@@ -16,6 +16,7 @@
     data: null,
     normals: null,
     normalsState: 'idle', // idle | loading | ok | error
+    openDays: {},         // 펼친 날짜 "weekList:2026-10-02" → true (다시 그려도 유지)
     tab: 'day',
     seq: 0,
     ctrl: null,
@@ -89,6 +90,63 @@
 
   /* ---------- 지도 ---------- */
 
+  /*
+   * 지도 그림(타일) 서버. 앞에서부터 쓰고, 한 곳이 계속 실패하면 다음 곳으로 넘어간다.
+   *
+   * OSM 공식 서버는 Referer 가 없는 브라우저 요청에 "Access blocked" 그림을 보낸다.
+   * index.html 을 더블클릭(file://)하면 Referer 가 없으므로 그때는 공식 서버를 건너뛴다.
+   * 오류가 아니라 정상 그림으로 오기 때문에 tileerror 로는 알아챌 수 없어서 미리 거른다.
+   */
+  var OSM_CREDIT = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  var TILE_SOURCES = [
+    {
+      id: 'osm', needsReferer: true, maxZoom: 19,
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attribution: OSM_CREDIT,
+    },
+    {
+      id: 'osm-hot', maxZoom: 19,
+      url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+      attribution: OSM_CREDIT + ', 타일 <a href="https://www.hotosm.org/">HOT</a> · <a href="https://openstreetmap.fr/">OSM France</a>',
+    },
+    {
+      id: 'osm-de', maxZoom: 18,
+      url: 'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+      attribution: OSM_CREDIT + ', 타일 <a href="https://www.openstreetmap.de/">OSM Deutschland</a>',
+    },
+  ];
+  var TILE_GIVE_UP = 3; // 한 장도 못 받고 이만큼 실패하면 다음 서버로
+  var tileLayer = null;
+
+  function setMapNotice(text) {
+    var box = $('mapNotice');
+    box.textContent = text || '';
+    box.hidden = !text;
+  }
+
+  function useTiles(list, i) {
+    if (tileLayer) map.removeLayer(tileLayer);
+    tileLayer = null;
+    if (i >= list.length) {
+      $('map').setAttribute('data-tiles', 'none');
+      setMapNotice('지도 그림을 불러오지 못했습니다. 인터넷이나 회사 방화벽에서 지도 서버가 막혔을 수 있습니다. ' +
+        '지역명 검색과 날씨는 그대로 쓸 수 있습니다.');
+      return;
+    }
+    var src = list[i];
+    var loaded = 0;
+    var failed = 0;
+    var gaveUp = false;
+    var layer = L.tileLayer(src.url, { maxZoom: src.maxZoom, attribution: src.attribution });
+    layer.on('tileload', function () { loaded++; setMapNotice(''); });
+    layer.on('tileerror', function () {
+      if (gaveUp || loaded > 0) return;
+      if (++failed >= TILE_GIVE_UP) { gaveUp = true; useTiles(list, i + 1); }
+    });
+    tileLayer = layer.addTo(map);
+    $('map').setAttribute('data-tiles', src.id);
+  }
+
   function initMap() {
     var box = $('map');
     if (!window.L) {
@@ -97,10 +155,8 @@
       return;
     }
     map = L.map(box, { worldCopyJump: true }).setView([36.4, 127.9], 7);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
+    var noReferer = location.protocol === 'file:';
+    useTiles(TILE_SOURCES.filter(function (s) { return !(s.needsReferer && noReferer); }), 0);
     map.on('click', function (e) { pickPoint(e.latlng.lat, e.latlng.lng); });
   }
 
@@ -136,6 +192,7 @@
     state.place = place;
     state.normals = null;
     state.normalsState = 'loading';
+    state.openDays = {};
 
     placeMarker(place.lat, place.lon);
     if (opts.fly && map) {
@@ -270,27 +327,35 @@
   }
 
   /* 하루: 24시간 기온 선 그래프 + 시간별 카드 */
+  /* 날씨 아이콘. 글자 설명은 aria-label·title 로 붙여 색·그림만으로 전달되지 않게 한다. */
+  function skyIcon(tag, cls, info) {
+    var icon = el(tag, cls, info.icon);
+    icon.setAttribute('role', 'img');
+    icon.setAttribute('aria-label', info.text);
+    icon.title = info.text;
+    return icon;
+  }
+
+  /* 시간 카드 — 하루 탭(1시간)과 일별 펼침(3시간)이 같이 쓴다 */
+  function hourCard(label, h) {
+    var li = el('li', 'hour');
+    li.setAttribute('data-time', h.time);
+    li.appendChild(el('div', 'h-time', label));
+    li.appendChild(skyIcon('div', 'h-icon', h.sky || API.describe(h.code)));
+    li.appendChild(el('div', 'h-temp', fmtTemp(h.temp)));
+    var meta = el('div', 'h-meta');
+    meta.appendChild(el('div', 'hm-pop', '강수 ' + fmtPct(h.pop)));
+    meta.appendChild(el('div', 'hm-hum', '습도 ' + fmtPct(h.humidity)));
+    meta.appendChild(el('div', 'hm-wind', fmtWind(h.wind)));
+    li.appendChild(meta);
+    return li;
+  }
+
   function renderDay() {
-    var hours = state.data.hours;
     var list = $('hourList');
     list.textContent = '';
-    hours.forEach(function (h, i) {
-      var info = API.describe(h.code);
-      var li = el('li', 'hour');
-      li.setAttribute('data-time', h.time);
-      li.appendChild(el('div', 'h-time', i === 0 ? '지금' : hourLabel(h.time)));
-      var icon = el('div', 'h-icon', info.icon);
-      icon.setAttribute('role', 'img');
-      icon.setAttribute('aria-label', info.text);
-      icon.title = info.text;
-      li.appendChild(icon);
-      li.appendChild(el('div', 'h-temp', fmtTemp(h.temp)));
-      var meta = el('div', 'h-meta');
-      meta.appendChild(el('div', null, '강수 ' + fmtPct(h.pop)));
-      meta.appendChild(el('div', null, '습도 ' + fmtPct(h.humidity)));
-      meta.appendChild(el('div', null, fmtWind(h.wind)));
-      li.appendChild(meta);
-      list.appendChild(li);
+    state.data.hours.forEach(function (h, i) {
+      list.appendChild(hourCard(i === 0 ? '지금' : hourLabel(h.time), h));
     });
     renderDayChart();
   }
@@ -427,7 +492,48 @@
     });
   }
 
-  /* 일별 목록 (일주일·한달 공용). 막대 눈금은 목록 전체가 한 축을 쓴다. */
+  /* 오전·오후 칸 하나 */
+  function halfCell(which, label, h) {
+    var cell = el('span', 'half');
+    cell.setAttribute('data-half', which);
+    cell.title = label + ' ' + h.sky.text + ' · 강수확률 ' + fmtPct(h.pop);
+    cell.appendChild(el('span', 'h-lab', label));
+    cell.appendChild(skyIcon('span', 'i', h.sky));
+    cell.appendChild(el('span', 'h-pop', fmtPct(h.pop)));
+    return cell;
+  }
+
+  /* 날짜를 펼치면 3시간 간격 예보. 오늘은 이미 지난 시간대를 뺀다. */
+  function renderSlots(panel, d) {
+    var now = state.data.now.time || '';
+    var today = now.slice(0, 10) === d.date;
+    var nowHour = Number(now.slice(11, 13));
+    var ul = el('ul', 'hours slots');
+    ul.setAttribute('aria-label', mmdd(d.date) + ' ' + dow(d.date) + '요일 3시간 간격 예보');
+    d.slots.forEach(function (s) {
+      if (today && s.hour + 3 <= nowHour) return;
+      ul.appendChild(hourCard(s.hour + '시', s));
+    });
+    panel.textContent = '';
+    panel.appendChild(ul);
+  }
+
+  function setOpen(key, row, panel, d, open) {
+    row.setAttribute('aria-expanded', String(open));
+    panel.hidden = !open;
+    if (open) {
+      state.openDays[key] = true;
+      if (!panel.firstChild) renderSlots(panel, d);
+    } else {
+      delete state.openDays[key];
+    }
+  }
+
+  /*
+   * 일별 목록 (일주일·한달 공용). 막대 눈금은 목록 전체가 한 축을 쓴다.
+   * 예보일은 오전·오후로 나눠 보여주고, 누르면 3시간 간격이 펼쳐진다.
+   * 예년일(17일째~)은 예보가 없어 하루 요약 한 칸만 두고 펼치지 않는다.
+   */
   function renderDays(list, days) {
     list.textContent = '';
     var lows = days.map(function (d) { return d.tmin; }).filter(num);
@@ -441,29 +547,35 @@
         list.appendChild(el('li', 'normal-divider',
           '여기부터 예년 참고값 — 예보가 아니라 최근 ' + API.NORMAL_YEARS + '년 같은 날짜의 평균입니다.'));
       }
-      var info = d.sky || API.describe(d.code);
       var li = el('li', 'day');
       li.setAttribute('data-kind', d.kind);
       li.setAttribute('data-date', d.date);
 
-      var date = el('div', 'd-date');
+      var canOpen = d.kind === 'forecast' && d.slots && d.slots.length > 0;
+      var row = el(canOpen ? 'button' : 'div', 'day-row');
+
+      var date = el('span', 'd-date');
       var label = i === 0 && d.kind === 'forecast' ? '오늘' : i === 1 && d.kind === 'forecast' ? '내일' : dow(d.date);
       var b = el('b', null, label);
       if (d.kind === 'normal') b.appendChild(el('span', 'badge', '예년'));
       date.appendChild(b);
-      date.appendChild(el('span', null, mmdd(d.date) + (label === dow(d.date) ? '' : ' ' + dow(d.date))));
-      li.appendChild(date);
+      date.appendChild(el('span', 'd-md', mmdd(d.date) + (label === dow(d.date) ? '' : ' ' + dow(d.date))));
+      row.appendChild(date);
 
-      var sky = el('div', 'd-sky');
-      var icon = el('span', 'i', info.icon);
-      icon.setAttribute('role', 'img');
-      icon.setAttribute('aria-label', info.text);
-      icon.title = info.text;
-      sky.appendChild(icon);
-      sky.appendChild(el('span', 't', info.text));
-      li.appendChild(sky);
+      var halves = el('span', 'd-halves');
+      if (d.am || d.pm) {
+        if (d.am) halves.appendChild(halfCell('am', '오전', d.am));
+        if (d.pm) halves.appendChild(halfCell('pm', '오후', d.pm));
+      } else {
+        var info = d.sky || API.describe(d.code);
+        var whole = el('span', 'half whole');
+        whole.appendChild(skyIcon('span', 'i', info));
+        whole.appendChild(el('span', 't', info.text));
+        halves.appendChild(whole);
+      }
+      row.appendChild(halves);
 
-      var temp = el('div', 'd-temp');
+      var temp = el('span', 'd-temp');
       temp.appendChild(el('span', 't-min', fmtTemp(d.tmin)));
       var range = el('span', 'range');
       range.setAttribute('aria-hidden', 'true');
@@ -475,17 +587,34 @@
       }
       temp.appendChild(range);
       temp.appendChild(el('span', 't-max', fmtTemp(d.tmax)));
-      li.appendChild(temp);
+      row.appendChild(temp);
 
-      var meta = el('div', 'd-meta');
+      var meta = el('span', 'd-meta');
       if (d.kind === 'normal') {
         meta.appendChild(el('span', 'm-rain', (d.snowYears ? '눈·비' : '비') + ' 온 해 ' + d.wetYears + '/' + d.years));
       } else {
-        meta.appendChild(el('span', 'm-rain', '강수 ' + fmtPct(d.pop) + (num(d.precip) && d.precip >= 0.05 ? ' · ' + fmtMm(d.precip) : '')));
+        meta.appendChild(el('span', 'm-rain', '강수량 ' + fmtMm(d.precip)));
       }
       meta.appendChild(el('span', 'm-hum', '습도 ' + fmtPct(d.humidity)));
       meta.appendChild(el('span', 'm-wind', '바람 ' + fmtWind(d.wind)));
-      li.appendChild(meta);
+      row.appendChild(meta);
+      li.appendChild(row);
+
+      if (canOpen) {
+        var key = list.id + ':' + d.date;
+        var panel = el('div', 'slots-panel');
+        panel.id = list.id + '-' + d.date;
+        row.type = 'button';
+        row.setAttribute('aria-controls', panel.id);
+        var chev = el('span', 'chev', '▾');
+        chev.setAttribute('aria-hidden', 'true');
+        row.appendChild(chev);
+        li.appendChild(panel);
+        setOpen(key, row, panel, d, !!state.openDays[key]);
+        row.addEventListener('click', function () {
+          setOpen(key, row, panel, d, row.getAttribute('aria-expanded') !== 'true');
+        });
+      }
 
       list.appendChild(li);
     });
@@ -501,13 +630,14 @@
     var note = $('monthNote');
     note.classList.remove('warn');
     var fc = days.length;
+    var farNote = ' 예보는 멀수록 부정확하니 8일째 이후는 참고만 하세요.';
     if (state.normalsState === 'ok' && state.normals) {
       days = days.concat(state.normals);
-      note.textContent = '1~' + fc + '일째는 예보, ' + (fc + 1) + '~' + days.length + '일째는 최근 ' +
-        API.NORMAL_YEARS + '년 같은 날짜의 평균(예년 참고값)입니다. 예보는 약 16일까지만 제공됩니다.';
+      note.textContent = '1~' + fc + '일째는 예보, ' + (fc + 1) + '~' + days.length + '일째는 예보가 없어 최근 ' +
+        API.NORMAL_YEARS + '년 같은 날짜의 평균(예년 참고값)을 보여줍니다.' + farNote;
     } else if (state.normalsState === 'error') {
       note.classList.add('warn');
-      note.textContent = (fc + 1) + '일째 이후의 예년 자료를 불러오지 못했습니다. ' + fc + '일 예보만 표시합니다.';
+      note.textContent = (fc + 1) + '일째 이후의 예년 자료를 불러오지 못했습니다. ' + fc + '일 예보만 표시합니다.' + farNote;
     } else {
       note.textContent = (fc + 1) + '일째 이후의 예년 자료를 불러오는 중…';
     }

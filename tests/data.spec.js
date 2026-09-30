@@ -80,6 +80,54 @@ test.describe('데이터 계층 (WeatherAPI)', () => {
     ]);
   });
 
+  test('여러 시간의 날씨 코드를 하나로 요약한다 (오전·오후, 3시간 칸)', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      const f = window.WeatherAPI._summarizeCodes;
+      return [
+        f([0, 0, 1, 61], 3),   // 비 1시간 < 기준 3 → 비 아닌 것 중 최빈: 맑음
+        f([0, 61, 61, 63], 3), // 비 3시간 ≥ 3 → 비 중 최빈: 약한 비
+        f([1, 2, 1, 2], 3),    // 동률 → 큰 코드(더 흐린 쪽)
+        f([0, 1, 51], 1),      // 3시간 칸은 1시간만 비여도 비
+        f([61, 63], 3),        // 비만 있으면 기준 미달이어도 비, 동률 → 더 궂은 쪽
+        f([], 3), f([null], 1),
+      ];
+    });
+    expect(r).toEqual([0, 61, 2, 51, 63, null, null]);
+  });
+
+  test('서머타임으로 23시간인 날도 날짜별로 제대로 묶는다', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      const time = [];
+      for (let d = 0; d < 2; d++) {
+        for (let h = 0; h < 24; h++) {
+          if (d === 0 && h === 2) continue; // 02시가 없는 날
+          time.push('2026-03-0' + (8 + d) + 'T' + String(h).padStart(2, '0') + ':00');
+        }
+      }
+      const fill = (v) => time.map(() => v);
+      const out = window.WeatherAPI._normalizeForecast({
+        current: { time: '2026-03-08T10:00' },
+        hourly: {
+          time, temperature_2m: time.map((t, i) => i), relative_humidity_2m: fill(50),
+          weather_code: fill(0), wind_speed_10m: fill(1), precipitation_probability: fill(10),
+        },
+        daily: {
+          time: ['2026-03-08', '2026-03-09'], weather_code: [0, 0], temperature_2m_max: [1, 1],
+          temperature_2m_min: [0, 0], wind_speed_10m_max: [1, 1], precipitation_sum: [0, 0],
+        },
+      });
+      return out.days.map((d) => ({
+        slots: d.slots.map((s) => s.hour), first: d.slots[0].time, amMin: d.am.tmin, pmMax: d.pm.tmax,
+      }));
+    });
+    expect(r[0].slots).toEqual([0, 3, 6, 9, 12, 15, 18, 21]);
+    expect(r[1].slots).toEqual([0, 3, 6, 9, 12, 15, 18, 21]);
+    /* 24개씩 잘랐다면 다음 날이 한 시간 밀린다 */
+    expect(r[1].first).toBe('2026-03-09T00:00');
+    expect(r[0].pmMax).toBe(22);
+    expect(r[1].amMin).toBe(23);
+  });
+
   test('거리 계산 (같은 이름 후보 합치기에 쓴다)', async ({ page }) => {
     const r = await page.evaluate(() => {
       const d = window.WeatherAPI._distanceKm;
